@@ -629,6 +629,31 @@ err_open:
     return NULL;
 }
 
+struct pcm_params *get_params(struct pcm *pcm)
+{
+    struct snd_pcm_hw_params *params;
+    int fd = pcm->fd;
+
+    params = calloc(1, sizeof(struct snd_pcm_hw_params));
+    if (!params){
+        fprintf(stderr, "PNTH: param calloc failed\n");
+	goto err_calloc;
+    }
+
+    param_init(params);
+    if (ioctl(fd, SNDRV_PCM_IOCTL_HW_REFINE, params)) {
+        fprintf(stderr, "SNDRV_PCM_IOCTL_HW_REFINE error (%d)\n", errno);
+        goto err_hw_refine;
+    }
+
+    return (struct pcm_params *)params;
+
+err_hw_refine:
+    free(params);
+err_calloc:
+    return NULL;
+}
+
 void pcm_params_free(struct pcm_params *pcm_params)
 {
     struct snd_pcm_hw_params *params = (struct snd_pcm_hw_params *)pcm_params;

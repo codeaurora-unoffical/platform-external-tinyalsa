@@ -162,6 +162,7 @@ int pcm_is_ready(struct pcm *pcm);
 /* Obtain the parameters for a PCM */
 struct pcm_params *pcm_params_get(unsigned int card, unsigned int device,
                                   unsigned int flags);
+struct pcm_params *get_params(struct pcm *pcm);
 void pcm_params_free(struct pcm_params *pcm_params);
 
 struct pcm_mask *pcm_params_get_mask(struct pcm_params *pcm_params,
