@@ -184,14 +184,13 @@ int check_param(struct pcm_params *params, unsigned int param, unsigned int valu
     return is_within_bounds;
 }
 
-int sample_is_playable(unsigned int card, unsigned int device, unsigned int channels,
+int sample_is_playable(struct pcm *pcm, unsigned int device, unsigned int channels,
                         unsigned int rate, unsigned int bits, unsigned int period_size,
                         unsigned int period_count)
 {
     struct pcm_params *params;
     int can_play;
-
-    params = pcm_params_get(card, device, PCM_OUT);
+    params = get_params(pcm);
     if (params == NULL) {
         fprintf(stderr, "Unable to open PCM device %u.\n", device);
         return 0;
@@ -233,14 +232,13 @@ void play_sample(FILE *file, unsigned int card, unsigned int device, unsigned in
     config.stop_threshold = 0;
     config.silence_threshold = 0;
 
-    if (!sample_is_playable(card, device, channels, rate, bits, period_size, period_count)) {
-        return;
-    }
-
     pcm = pcm_open(card, device, PCM_OUT, &config);
     if (!pcm || !pcm_is_ready(pcm)) {
         fprintf(stderr, "Unable to open PCM device %u (%s)\n",
                 device, pcm_get_error(pcm));
+        return;
+    }
+    if (!sample_is_playable(pcm, device, channels, rate, bits, period_size, period_count)) {
         return;
     }
 
