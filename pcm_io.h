@@ -31,6 +31,7 @@
 #ifndef __PCM_H__
 #define __PCM_H__
 
+#include <poll.h>
 #include <sound/asound.h>
 
 struct pcm_ops {
@@ -38,6 +39,10 @@ struct pcm_ops {
                  unsigned int flags, void **data, void *node);
     void (*close) (void *data);
     int (*ioctl) (void *data, unsigned int cmd, ...);
+    void* (*mmap) (void *data, void *addr, size_t length, int prot, int flags,
+                 off_t offset);
+    int (*munmap) (void *data, void *addr, size_t length);
+    int (*poll) (void *data, struct pollfd *pfd, nfds_t nfds, int timeout);
 };
 
 #endif /* end of __PCM_H__ */
