@@ -31,6 +31,7 @@
 
 #include <sys/time.h>
 #include <stddef.h>
+#include <sound/asound.h>
 
 #if defined(__cplusplus)
 extern "C" {
@@ -317,6 +318,7 @@ int mixer_ctl_get_range_max(struct mixer_ctl *ctl);
 int mixer_subscribe_events(struct mixer *mixer, int subscribe);
 int mixer_wait_event(struct mixer *mixer, int timeout);
 int mixer_consume_event(struct mixer *mixer);
+int mixer_read_event(struct mixer *mixer, struct snd_ctl_event *ev);
 
 #if defined(__cplusplus)
 }  /* extern "C" */
