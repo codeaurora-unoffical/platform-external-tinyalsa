@@ -1,6 +1,6 @@
 /* pcm_plugin.c
 **
-** Copyright (c) 2019-2020, The Linux Foundation. All rights reserved.
+** Copyright (c) 2019, The Linux Foundation. All rights reserved.
 **
 ** Redistribution and use in source and binary forms, with or without
 ** modification, are permitted provided that the following conditions are
@@ -652,9 +652,10 @@ static int pcm_plug_open(unsigned int card, unsigned int device,
                   unsigned int flags, void **data, void *pcm_node)
 {
     struct pcm_plug_data *plug_data;
+    const char *err = NULL;
     void *dl_hdl;
     int rc = 0;
-    char *so_name, token[80], *name, *open_fn, *token_saveptr;
+    char *so_name, token[80], *name, *open_fn;
 
     plug_data = calloc(1, sizeof(*plug_data));
     if (!plug_data) {
@@ -678,12 +679,8 @@ static int pcm_plug_open(unsigned int card, unsigned int device,
     dlerror();
 
     sscanf(so_name, "lib%s", token);
-    token_saveptr = token;
-    name = strtok_r(token, ".", &token_saveptr);
-    if (!name) {
-        fprintf(stderr, "%s: invalid library name\n", __func__);
-        goto err_open_fn;
-    }
+    name = strtok(token, ".");
+
     open_fn = calloc(1, strlen(name) + strlen("_open") + 1);
     if (!open_fn) {
         rc = -ENOMEM;
@@ -695,9 +692,11 @@ static int pcm_plug_open(unsigned int card, unsigned int device,
 
     printf("%s - %s\n", __func__, open_fn);
     plug_data->plugin_open_fn = dlsym(dl_hdl, open_fn);
-    if (!plug_data->plugin_open_fn) {
+    err = dlerror();
+
+    if (err) {
         fprintf(stderr, "%s: dlsym to open fn failed, err = '%s'\n",
-                __func__, dlerror());
+                __func__, err);
         goto err_dlsym;
     }
 
@@ -721,7 +720,6 @@ static int pcm_plug_open(unsigned int card, unsigned int device,
 
     plug_data->plugin->state = PCM_PLUG_STATE_OPEN;
 
-    free(open_fn);
     return 0;
 
 err_dlsym:
