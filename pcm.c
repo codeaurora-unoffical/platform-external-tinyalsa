@@ -47,13 +47,6 @@
 #include <sound/asound.h>
 
 #include <tinyalsa/asoundlib.h>
-#include "pcm_io.h"
-#include "snd_utils.h"
-
-enum {
-    PCM_NODE_TYPE_HW = 0,
-    PCM_NODE_TYPE_PLUGIN,
-};
 
 #define PARAM_MAX SNDRV_PCM_HW_PARAM_LAST_INTERVAL
 
@@ -129,9 +122,6 @@ static const char * const format_lookup[] = {
         "DSD_U16_LE",
 #endif
 };
-
-extern struct pcm_ops hw_ops;
-extern struct pcm_ops plug_ops;
 
 /* refer to SNDRV_PCM_SUBFORMAT_##index in sound/asound.h. */
 static const char * const subformat_lookup[] = {
@@ -267,10 +257,6 @@ struct pcm {
     unsigned int noirq_frames_per_msec;
     int wait_for_avail_min;
     unsigned int subdevice;
-
-    struct pcm_ops *ops;
-    void *data;
-    void *snd_node;
 };
 
 unsigned int pcm_get_buffer_size(struct pcm *pcm)
@@ -350,8 +336,7 @@ unsigned int pcm_frames_to_bytes(struct pcm *pcm, unsigned int frames)
 static int pcm_sync_ptr(struct pcm *pcm, int flags) {
     if (pcm->sync_ptr) {
         pcm->sync_ptr->flags = flags;
-        if (pcm->ops->ioctl(pcm->data, SNDRV_PCM_IOCTL_SYNC_PTR,
-                            pcm->sync_ptr) < 0)
+        if (ioctl(pcm->fd, SNDRV_PCM_IOCTL_SYNC_PTR, pcm->sync_ptr) < 0)
             return -1;
     }
     return 0;
@@ -547,12 +532,12 @@ int pcm_write(struct pcm *pcm, const void *data, unsigned int count)
             int prepare_error = pcm_prepare(pcm);
             if (prepare_error)
                 return prepare_error;
-            if (pcm->ops->ioctl(pcm->data, SNDRV_PCM_IOCTL_WRITEI_FRAMES, &x))
+            if (ioctl(pcm->fd, SNDRV_PCM_IOCTL_WRITEI_FRAMES, &x))
                 return oops(pcm, errno, "cannot write initial data");
             pcm->running = 1;
             return 0;
         }
-        if (pcm->ops->ioctl(pcm->data, SNDRV_PCM_IOCTL_WRITEI_FRAMES, &x)) {
+        if (ioctl(pcm->fd, SNDRV_PCM_IOCTL_WRITEI_FRAMES, &x)) {
             pcm->prepared = 0;
             pcm->running = 0;
             if (errno == EPIPE) {
@@ -588,7 +573,7 @@ int pcm_read(struct pcm *pcm, void *data, unsigned int count)
                 return -errno;
             }
         }
-        if (pcm->ops->ioctl(pcm->data, SNDRV_PCM_IOCTL_READI_FRAMES, &x)) {
+        if (ioctl(pcm->fd, SNDRV_PCM_IOCTL_READI_FRAMES, &x)) {
             pcm->prepared = 0;
             pcm->running = 0;
             if (errno == EPIPE) {
@@ -610,22 +595,15 @@ struct pcm_params *pcm_params_get(unsigned int card, unsigned int device,
                                   unsigned int flags)
 {
     struct snd_pcm_hw_params *params;
-    enum snd_node_type pcm_type;
-    struct pcm_ops *ops;
-    void *snd_node, *data;
+    char fn[256];
     int fd;
 
-    snd_node = snd_utils_get_dev_node(card, device, NODE_PCM);
-    pcm_type = snd_utils_get_node_type(snd_node);
-    if (pcm_type == SND_NODE_TYPE_PLUGIN)
-        ops = &plug_ops;
-    else
-        ops = &hw_ops;
+    snprintf(fn, sizeof(fn), "/dev/snd/pcmC%uD%u%c", card, device,
+             flags & PCM_IN ? 'c' : 'p');
 
-    fd = ops->open(card, device, flags, &data, snd_node);
+    fd = open(fn, O_RDWR);
     if (fd < 0) {
-        fprintf(stderr, "cannot open device %u for card %u\n",
-                device, card);
+        fprintf(stderr, "cannot open device '%s'\n", fn);
         goto err_open;
     }
 
@@ -634,22 +612,20 @@ struct pcm_params *pcm_params_get(unsigned int card, unsigned int device,
         goto err_calloc;
 
     param_init(params);
-    if (ops->ioctl(data, SNDRV_PCM_IOCTL_HW_REFINE, params)) {
+    if (ioctl(fd, SNDRV_PCM_IOCTL_HW_REFINE, params)) {
         fprintf(stderr, "SNDRV_PCM_IOCTL_HW_REFINE error (%d)\n", errno);
         goto err_hw_refine;
     }
 
-    snd_utils_put_dev_node(snd_node);
-    ops->close(data);
+    close(fd);
 
     return (struct pcm_params *)params;
 
 err_hw_refine:
     free(params);
 err_calloc:
-    ops->close(data);
+    close(fd);
 err_open:
-    snd_utils_put_dev_node(snd_node);
     return NULL;
 }
 
@@ -886,9 +862,8 @@ int pcm_close(struct pcm *pcm)
         munmap(pcm->mmap_buffer, pcm_frames_to_bytes(pcm, pcm->buffer_size));
     }
 
-    pcm->ops->close(pcm->data);
-    snd_utils_put_dev_node(pcm->snd_node);
-
+    if (pcm->fd >= 0)
+        close(pcm->fd);
     pcm->prepared = 0;
     pcm->running = 0;
     pcm->buffer_size = 0;
@@ -904,7 +879,8 @@ struct pcm *pcm_open(unsigned int card, unsigned int device,
     struct snd_pcm_info info;
     struct snd_pcm_hw_params params;
     struct snd_pcm_sw_params sparams;
-    int rc, pcm_type;
+    char fn[256];
+    int rc;
 
     if (!config) {
         return &bad_pcm; /* TODO: could support default config here */
@@ -914,23 +890,24 @@ struct pcm *pcm_open(unsigned int card, unsigned int device,
         return &bad_pcm; /* TODO: could support default config here */
 
     pcm->config = *config;
+
+    snprintf(fn, sizeof(fn), "/dev/snd/pcmC%uD%u%c", card, device,
+             flags & PCM_IN ? 'c' : 'p');
+
     pcm->flags = flags;
-
-    pcm->snd_node = snd_utils_get_dev_node(card, device, NODE_PCM);
-    pcm_type = snd_utils_get_node_type(pcm->snd_node);
-    if (pcm_type == SND_NODE_TYPE_PLUGIN)
-        pcm->ops = &plug_ops;
-    else
-        pcm->ops = &hw_ops;
-
-    pcm->fd = pcm->ops->open(card, device, flags, &pcm->data, pcm->snd_node);
+    pcm->fd = open(fn, O_RDWR|O_NONBLOCK);
     if (pcm->fd < 0) {
-        oops(pcm, errno, "cannot open device %u for card %u",
-             device, card);
-        goto fail_open;
+        oops(pcm, errno, "cannot open device '%s'", fn);
+        return pcm;
     }
 
-    if (pcm->ops->ioctl(pcm->data, SNDRV_PCM_IOCTL_INFO, &info)) {
+    if (fcntl(pcm->fd, F_SETFL, fcntl(pcm->fd, F_GETFL) &
+              ~O_NONBLOCK) < 0) {
+        oops(pcm, errno, "failed to reset blocking mode '%s'", fn);
+        goto fail_close;
+    }
+
+    if (ioctl(pcm->fd, SNDRV_PCM_IOCTL_INFO, &info)) {
         oops(pcm, errno, "cannot get info");
         goto fail_close;
     }
@@ -968,7 +945,7 @@ struct pcm *pcm_open(unsigned int card, unsigned int device,
         param_set_mask(&params, SNDRV_PCM_HW_PARAM_ACCESS,
                        SNDRV_PCM_ACCESS_RW_INTERLEAVED);
 
-    if (pcm->ops->ioctl(pcm->data, SNDRV_PCM_IOCTL_HW_PARAMS, &params)) {
+    if (ioctl(pcm->fd, SNDRV_PCM_IOCTL_HW_PARAMS, &params)) {
         oops(pcm, errno, "cannot set hw params");
         goto fail_close;
     }
@@ -1029,7 +1006,7 @@ struct pcm *pcm_open(unsigned int card, unsigned int device,
     while (pcm->boundary * 2 <= INT_MAX - pcm->buffer_size)
         pcm->boundary *= 2;
 
-    if (pcm->ops->ioctl(pcm->data, SNDRV_PCM_IOCTL_SW_PARAMS, &sparams)) {
+    if (ioctl(pcm->fd, SNDRV_PCM_IOCTL_SW_PARAMS, &sparams)) {
         oops(pcm, errno, "cannot set sw params");
         goto fail;
     }
@@ -1043,7 +1020,7 @@ struct pcm *pcm_open(unsigned int card, unsigned int device,
 #ifdef SNDRV_PCM_IOCTL_TTSTAMP
     if (pcm->flags & PCM_MONOTONIC) {
         int arg = SNDRV_PCM_TSTAMP_TYPE_MONOTONIC;
-        rc = pcm->ops->ioctl(pcm->data, SNDRV_PCM_IOCTL_TTSTAMP, &arg);
+        rc = ioctl(pcm->fd, SNDRV_PCM_IOCTL_TTSTAMP, &arg);
         if (rc < 0) {
             oops(pcm, errno, "cannot set timestamp type");
             goto fail;
@@ -1058,11 +1035,8 @@ fail:
     if (flags & PCM_MMAP)
         munmap(pcm->mmap_buffer, pcm_frames_to_bytes(pcm, pcm->buffer_size));
 fail_close:
-    pcm->ops->close(pcm->data);
+    close(pcm->fd);
     pcm->fd = -1;
-
-fail_open:
-    snd_utils_put_dev_node(pcm->snd_node);
     return pcm;
 }
 
@@ -1076,7 +1050,7 @@ int pcm_prepare(struct pcm *pcm)
     if (pcm->prepared)
         return 0;
 
-    if (pcm->ops->ioctl(pcm->data, SNDRV_PCM_IOCTL_PREPARE) < 0)
+    if (ioctl(pcm->fd, SNDRV_PCM_IOCTL_PREPARE) < 0)
         return oops(pcm, errno, "cannot prepare channel");
 
     pcm->prepared = 1;
@@ -1090,9 +1064,9 @@ int pcm_start(struct pcm *pcm)
         return prepare_error;
 
     if (pcm->flags & PCM_MMAP)
-        pcm_sync_ptr(pcm, 0);
+	    pcm_sync_ptr(pcm, 0);
 
-    if (pcm->ops->ioctl(pcm->data, SNDRV_PCM_IOCTL_START) < 0)
+    if (ioctl(pcm->fd, SNDRV_PCM_IOCTL_START) < 0)
         return oops(pcm, errno, "cannot start channel");
 
     pcm->running = 1;
@@ -1101,7 +1075,7 @@ int pcm_start(struct pcm *pcm)
 
 int pcm_stop(struct pcm *pcm)
 {
-    if (pcm->ops->ioctl(pcm->data, SNDRV_PCM_IOCTL_DROP) < 0)
+    if (ioctl(pcm->fd, SNDRV_PCM_IOCTL_DROP) < 0)
         return oops(pcm, errno, "cannot stop channel");
 
     pcm->prepared = 0;
@@ -1277,7 +1251,7 @@ int pcm_mmap_transfer(struct pcm *pcm, const void *buffer, unsigned int bytes)
         }
 
         /* start the audio if we reach the threshold */
-        if (!pcm->running &&
+	    if (!pcm->running &&
             (pcm->buffer_size - avail) >= pcm->config.start_threshold) {
             if (pcm_start(pcm) < 0) {
                fprintf(stderr, "start error: hw 0x%x app 0x%x avail 0x%x\n",
@@ -1373,5 +1347,5 @@ int pcm_ioctl(struct pcm *pcm, int request, ...)
     arg = va_arg(ap, void *);
     va_end(ap);
 
-    return pcm->ops->ioctl(pcm->data, request, arg);
+    return ioctl(pcm->fd, request, arg);
 }
