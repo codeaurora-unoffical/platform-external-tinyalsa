@@ -465,9 +465,9 @@ int pcm_get_htimestamp(struct pcm *pcm, unsigned int *avail,
             (pcm->mmap_status->state != PCM_STATE_DRAINING))
         return -1;
 
-    *tstamp = pcm->mmap_status->tstamp;
-    if (tstamp->tv_sec == 0 && tstamp->tv_nsec == 0)
+    if (pcm->mmap_status->tstamp.tv_sec == 0 &&  pcm->mmap_status->tstamp.tv_nsec ==0)
         return -1;
+    *tstamp = pcm->mmap_status->tstamp;
 
     hw_ptr = pcm->mmap_status->hw_ptr;
     if (pcm->flags & PCM_IN)
