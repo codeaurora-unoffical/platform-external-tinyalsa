@@ -40,7 +40,6 @@
 #define ID_DATA 0x61746164
 
 #define FORMAT_PCM 1
-#define FORMAT_PCM_32 3
 
 struct wav_header {
     uint32_t riff_id;
@@ -150,7 +149,6 @@ int main(int argc, char **argv)
     switch (bits) {
     case 32:
         format = PCM_FORMAT_S32_LE;
-        header.audio_format = FORMAT_PCM_32;
         break;
     case 24:
         format = PCM_FORMAT_S24_LE;
