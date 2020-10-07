@@ -510,35 +510,12 @@ static int pcm_plug_sparams(struct pcm_plug_data *plug_data,
     return plugin->ops->sw_params(plugin, params);
 }
 
-static int convert_plugin_to_pcm_state(int plugin_state)
-{
-    switch (plugin_state) {
-    case PCM_PLUG_STATE_SETUP:
-        return PCM_STATE_SETUP;
-    case PCM_PLUG_STATE_RUNNING:
-        return PCM_STATE_RUNNING;
-    case PCM_PLUG_STATE_PREPARED:
-        return PCM_STATE_PREPARED;
-    case PCM_PLUG_STATE_OPEN:
-        return PCM_STATE_OPEN;
-    }
-
-    return PCM_STATE_OPEN;
-}
-
 static int pcm_plug_sync_ptr(struct pcm_plug_data *plug_data,
                 struct snd_pcm_sync_ptr *sync_ptr)
 {
     struct pcm_plugin *plugin = plug_data->plugin;
-    int ret = -EBADFD;
 
-    if (plugin->state >= PCM_PLUG_STATE_SETUP) {
-        ret = plugin->ops->sync_ptr(plugin, sync_ptr);
-        if (ret == 0)
-            sync_ptr->s.status.state = convert_plugin_to_pcm_state(plugin->state);
-    }
-
-    return ret;
+    return plugin->ops->sync_ptr(plugin, sync_ptr);
 }
 
 static int pcm_plug_writei_frames(struct pcm_plug_data *plug_data,
@@ -569,10 +546,10 @@ static int pcm_plug_ttstamp(struct pcm_plug_data *plug_data,
 {
     struct pcm_plugin *plugin = plug_data->plugin;
 
-    if (plugin->state >= PCM_PLUG_STATE_SETUP)
-        return plugin->ops->ttstamp(plugin, tstamp);
-    else
+    if (plugin->state != PCM_PLUG_STATE_RUNNING)
         return -EBADFD;
+
+    return plugin->ops->ttstamp(plugin, tstamp);
 }
 
 static int pcm_plug_prepare(struct pcm_plug_data *plug_data)
@@ -671,37 +648,6 @@ static int pcm_plug_ioctl(void *data, unsigned int cmd, ...)
     return ret;
 }
 
-static int pcm_plug_poll(void *data, struct pollfd *pfd, nfds_t nfds,
-        int timeout)
-{
-    struct pcm_plug_data *plug_data = data;
-    struct pcm_plugin *plugin = plug_data->plugin;
-
-    return plugin->ops->poll(plugin, pfd, nfds, timeout);
-}
-
-static void* pcm_plug_mmap(void *data, void *addr, size_t length, int prot,
-                       int flags, off_t offset)
-{
-    struct pcm_plug_data *plug_data = data;
-    struct pcm_plugin *plugin = plug_data->plugin;
-
-    if (plugin->state != PCM_PLUG_STATE_SETUP)
-        return NULL;
-    return plugin->ops->mmap(plugin, addr, length, prot, flags, offset);
-}
-
-static int pcm_plug_munmap(void *data, void *addr, size_t length)
-{
-    struct pcm_plug_data *plug_data = data;
-    struct pcm_plugin *plugin = plug_data->plugin;
-
-    if (plugin->state != PCM_PLUG_STATE_SETUP)
-        return -EBADFD;
-
-    return plugin->ops->munmap(plugin, addr, length);
-}
-
 static int pcm_plug_open(unsigned int card, unsigned int device,
                   unsigned int flags, void **data, void *pcm_node)
 {
@@ -723,7 +669,7 @@ static int pcm_plug_open(unsigned int card, unsigned int device,
 
     dl_hdl = dlopen(so_name, RTLD_NOW);
     if (!dl_hdl) {
-        fprintf(stderr, "%s: unable to open %s: %s\n", __func__, so_name, dlerror());
+        fprintf(stderr, "%s: unable to open %s\n", __func__, so_name);
         goto err_dl_open;
     } else {
         fprintf(stderr, "%s: dlopen successful for %s\n", __func__, so_name);
@@ -793,7 +739,4 @@ struct pcm_ops plug_ops = {
     .open = pcm_plug_open,
     .close = pcm_plug_close,
     .ioctl = pcm_plug_ioctl,
-    .mmap = pcm_plug_mmap,
-    .munmap = pcm_plug_munmap,
-    .poll = pcm_plug_poll,
 };
