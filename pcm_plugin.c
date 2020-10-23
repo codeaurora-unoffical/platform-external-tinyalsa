@@ -557,7 +557,8 @@ static int pcm_plug_prepare(struct pcm_plug_data *plug_data)
     struct pcm_plugin *plugin = plug_data->plugin;
     int rc;
 
-    if (plugin->state != PCM_PLUG_STATE_SETUP)
+    if (plugin->state != PCM_PLUG_STATE_SETUP &&
+        plugin->state != PCM_PLUG_STATE_PREPARED)
         return -EBADFD;
 
     rc = plugin->ops->prepare(plugin);
@@ -585,13 +586,8 @@ static int pcm_plug_start(struct pcm_plug_data *plug_data)
 static int pcm_plug_drop(struct pcm_plug_data *plug_data)
 {
     struct pcm_plugin *plugin = plug_data->plugin;
-    int rc = 0;
 
-    rc = plugin->ops->drop(plugin);
-    if (!rc)
-        plugin->state = PCM_PLUG_STATE_SETUP;
-
-    return rc;
+    return plugin->ops->drop(plugin);
 }
 
 static int pcm_plug_ioctl(void *data, unsigned int cmd, ...)
