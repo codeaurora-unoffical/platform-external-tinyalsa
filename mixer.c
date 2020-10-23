@@ -841,9 +841,9 @@ int mixer_subscribe_events(struct mixer *mixer, int subscribe)
  */
 int mixer_wait_event(struct mixer *mixer, int timeout)
 {
-    struct pollfd *pfd = NULL;
+    struct pollfd *pfd;
     struct mixer_ctl_group *grp;
-    int count = 0, num_fds = 0, ret = 0, i;
+    int count = 0, num_fds = 0, i;
 
     if (mixer->fd >= 0)
         num_fds++;
@@ -851,7 +851,7 @@ int mixer_wait_event(struct mixer *mixer, int timeout)
     if (mixer->virt_grp)
         num_fds++;
 
-    pfd = (struct pollfd *)calloc(num_fds, sizeof(struct pollfd));
+    pfd = (struct pollfd *)calloc(sizeof(struct pollfd), num_fds);
     if (!pfd)
         return -ENOMEM;
 
@@ -871,22 +871,18 @@ int mixer_wait_event(struct mixer *mixer, int timeout)
     }
 
     if (!count)
-        goto exit;
+        return 0;
 
     for (;;) {
         int err;
         err = poll(pfd, count, timeout);
-        if (err < 0) {
-            ret = -errno;
-            goto exit;
-        }
+        if (err < 0)
+            return -errno;
         if (!err)
-            goto exit;
+            return 0;
         for (i = 0; i < count; i++) {
-            if (pfd[i].revents & (POLLERR | POLLNVAL)) {
-                ret = -EIO;
-                goto exit;
-            }
+            if (pfd[i].revents & (POLLERR | POLLNVAL))
+                return -EIO;
             if (pfd[i].revents & (POLLIN | POLLOUT)) {
                 if ((i == 0) && mixer->fd >= 0) {
                     grp = mixer->hw_grp;
@@ -895,16 +891,10 @@ int mixer_wait_event(struct mixer *mixer, int timeout)
                     grp = mixer->virt_grp;
                     grp->event_cnt++;
                 }
-                ret = 1;
-                goto exit;
+                return 1;
             }
         }
     }
-
-exit:
-    if (pfd)
-        free(pfd);
-    return ret;
 }
 
 /** Consume a mixer event.
